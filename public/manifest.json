@@ -1,0 +1,20 @@
+{
+  "short_name": "勤務支援",
+  "name": "甲股勤務支援中心",
+  "icons": [
+    {
+      "src": "https://i.postimg.cc/4NM3kH29/icon-192x192-png.png",
+      "type": "image/png",
+      "sizes": "192x192"
+    },
+    {
+      "src": "https://i.postimg.cc/4NM3kH29/icon-192x192-png.png",
+      "type": "image/png",
+      "sizes": "512x512"
+    }
+  ],
+  "start_url": ".",
+  "display": "standalone",
+  "theme_color": "#ffffff",
+  "background_color": "#ffffff"
+}
