@@ -25,7 +25,7 @@ import {
   LogOut,
   X,
   MessageSquare,
-  User, // 💡 補上這個缺漏的人物圖示，就不會再閃退了！
+  User,
 } from "lucide-react";
 
 // ==========================================
@@ -444,12 +444,10 @@ export default function App() {
   return (
     <div className="min-h-screen bg-[#F8FAFC] max-w-md mx-auto relative font-sans overflow-x-hidden selection:bg-blue-100">
       <style>{`
-        /* 隱藏原生滾動條，讓整體看起來更像 App */
         ::-webkit-scrollbar { display: none; }
         html { -ms-overflow-style: none; scrollbar-width: none; scroll-behavior: smooth; }
       `}</style>
 
-      {/* 提示訊息 */}
       {msg && (
         <div className={`fixed top-6 left-1/2 -translate-x-1/2 z-[100] px-6 py-3.5 rounded-full text-white text-sm font-bold shadow-lg animate-in fade-in slide-in-from-top-4 flex items-center gap-2 ${
             msg.type === "error" ? "bg-rose-600" : msg.type === "warning" ? "bg-amber-500" : "bg-slate-800"
@@ -459,7 +457,6 @@ export default function App() {
         </div>
       )}
 
-      {/* 登入畫面 */}
       {showLogin && (
         <div className="fixed inset-0 z-[60] bg-slate-900/40 backdrop-blur-md flex items-center justify-center p-5">
           <div className="bg-white w-full max-w-sm max-h-[85vh] overflow-y-auto rounded-[2.5rem] p-7 sm:p-8 space-y-7 shadow-2xl animate-in zoom-in-95">
@@ -499,7 +496,6 @@ export default function App() {
         </div>
       )}
 
-      {/* 發布單 Modal */}
       {showPostModal && (
         <div className="fixed inset-0 z-[60] bg-slate-900/40 backdrop-blur-sm flex items-end justify-center">
           <div className="bg-white w-full max-w-md max-h-[90vh] overflow-y-auto rounded-t-[2.5rem] p-7 pb-[calc(env(safe-area-inset-bottom)+2rem)] animate-in slide-in-from-bottom-full shadow-[0_-10px_40px_rgba(0,0,0,0.15)]">
