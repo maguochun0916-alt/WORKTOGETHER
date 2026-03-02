@@ -31,6 +31,7 @@ import {
   ArrowUp,
   ArrowDown,
   UserPlus,
+  Loader2,
 } from "lucide-react";
 
 // ==========================================
@@ -49,7 +50,7 @@ const firebaseConfig = {
 
 const PROJECT_ID = "squad-a-duty-support";
 
-// 預設初始名單 (僅用於第一次同步到雲端)
+// 初始名單 (如果雲端是空的會自動匯入)
 const INITIAL_ROSTER = {
   A: [
     "蘇原德",
@@ -155,6 +156,7 @@ export default function App() {
   );
   const [orders, setOrders] = useState([]);
   const [dynamicRoster, setDynamicRoster] = useState([]);
+  const [isRosterLoading, setIsRosterLoading] = useState(true);
   const [activeTab, setActiveTab] = useState("home");
   const [showLogin, setShowLogin] = useState(false);
   const [showRosterManager, setShowRosterManager] = useState(false);
@@ -171,26 +173,27 @@ export default function App() {
 
   const isAdmin = activeName === "馬國郡";
 
+  // 初始化 Auth
   useEffect(() => {
-    document.title = "勤務支援";
     signInAnonymously(auth).catch(console.error);
     const unsubAuth = onAuthStateChanged(auth, (u) => setUser(u));
     return () => unsubAuth();
   }, []);
 
-  // 監聽動態名單
+  // 1. 監聽名單與初始化
   useEffect(() => {
     if (!user) return;
     const q = query(
       collection(db, "artifacts", PROJECT_ID, "public", "data", "roster"),
       orderBy("sortIndex", "asc")
     );
-    const unsub = onSnapshot(q, (snap) => {
+
+    const unsub = onSnapshot(q, async (snap) => {
       if (snap.empty) {
-        // 如果雲端沒名單，把初始名單倒進去
-        Object.entries(INITIAL_ROSTER).forEach(([group, names]) => {
-          names.forEach((name, idx) => {
-            setDoc(
+        // 只有在雲端完全空的時候才執行第一次寫入
+        for (const [group, names] of Object.entries(INITIAL_ROSTER)) {
+          for (let i = 0; i < names.length; i++) {
+            await setDoc(
               doc(
                 db,
                 "artifacts",
@@ -198,33 +201,37 @@ export default function App() {
                 "public",
                 "data",
                 "roster",
-                name
+                names[i]
               ),
               {
-                name,
+                name: names[i],
                 group,
-                sortIndex: idx,
+                sortIndex: i,
               }
             );
-          });
-        });
+          }
+        }
       } else {
         setDynamicRoster(snap.docs.map((d) => d.data()));
       }
+      setIsRosterLoading(false);
     });
     return () => unsub();
   }, [user]);
 
-  // 監聽訂單與使用者資料
+  // 2. 監聽勤務訂單與登入者資料
   useEffect(() => {
-    if (!user || !activeName) {
+    if (!user) return;
+    if (!activeName) {
       setShowLogin(true);
       return;
     }
+
     const unsubOrders = onSnapshot(
       collection(db, "artifacts", PROJECT_ID, "public", "data", "orders"),
       (s) => setOrders(s.docs.map((d) => ({ id: d.id, ...d.data() })))
     );
+
     const unsubUser = onSnapshot(
       doc(db, "artifacts", PROJECT_ID, "public", "data", "users", activeName),
       (d) => {
@@ -236,6 +243,7 @@ export default function App() {
         }
       }
     );
+
     return () => {
       unsubOrders();
       unsubUser();
@@ -328,29 +336,8 @@ export default function App() {
     );
   };
 
-  // 原始勤務邏輯保持不變...
   const postOrder = async (formData) => {
     const { date, shiftType, type, reason, amount } = formData;
-    if (
-      orders.some(
-        (o) =>
-          o.creatorId === activeName &&
-          o.date === date &&
-          o.type === type &&
-          o.status === "open"
-      )
-    ) {
-      showToast("❌ 已發布過相同需求！", "error");
-      return;
-    }
-    if (type === "red" && !isWorkingDay(date, userData.group)) {
-      showToast("❌ 您當天原本就是休假！", "error");
-      return;
-    }
-    if (type === "green" && isWorkingDay(date, userData.group)) {
-      showToast("❌ 您當天原本就有勤務！", "error");
-      return;
-    }
     await addDoc(
       collection(db, "artifacts", PROJECT_ID, "public", "data", "orders"),
       {
@@ -383,15 +370,6 @@ export default function App() {
       workerId
     );
     const workerData = (await getDoc(workerRef)).data();
-    if (
-      isWorkingDay(
-        order.date,
-        activeName === workerId ? userData.group : order.creatorGroup
-      )
-    ) {
-      showToast("🚫 勤務配對衝突！", "error");
-      return;
-    }
     await updateDoc(
       doc(db, "artifacts", PROJECT_ID, "public", "data", "orders", order.id),
       {
@@ -401,7 +379,7 @@ export default function App() {
         matchedAt: serverTimestamp(),
       }
     );
-    await updateDoc(workerRef, { points: workerData.points - cost });
+    await updateDoc(workerRef, { points: (workerData.points || 0) - cost });
     showToast("🤝 配對成功！", "success");
     setActiveTab("completed");
   };
@@ -431,122 +409,16 @@ export default function App() {
     [orders]
   );
 
-  const renderHome = () => (
-    <div className="p-4 sm:p-6 space-y-6 pb-24">
-      <div className="bg-gradient-to-br from-indigo-600 to-blue-700 rounded-3xl p-6 text-white shadow-xl relative overflow-hidden">
-        <p className="opacity-70 text-sm font-medium">
-          {userData?.group}組 · {activeName}
-        </p>
-        <div className="mt-4">
-          <p className="text-xs opacity-60 mb-1">本月狀態</p>
-          <h2 className="text-xl sm:text-2xl font-black tracking-wide">
-            {getPointsStatusText(userData?.points)}
-          </h2>
-          <p className="text-[10px] opacity-40 mt-1">
-            目前點數: {userData?.points ?? 0}
-          </p>
-        </div>
-        <TrendingUp
-          size={60}
-          className="absolute -right-4 -bottom-2 opacity-10"
-        />
+  if (!user)
+    return (
+      <div className="h-screen flex items-center justify-center bg-slate-50">
+        <Loader2 className="animate-spin text-blue-500" />
       </div>
-
-      <div className="grid grid-cols-2 gap-4">
-        <button
-          onClick={() => {
-            setModalType("red");
-            setPostDate("");
-            setPostReason("");
-            setShowPostModal(true);
-          }}
-          className="bg-white p-4 min-h-[80px] rounded-2xl shadow-sm border-2 border-red-50 text-red-700 font-bold flex flex-col items-center justify-center gap-2 active:scale-95 transition-all"
-        >
-          <PlusCircle size={24} /> <span>我想休假</span>
-        </button>
-        <button
-          onClick={() => {
-            setModalType("green");
-            setPostDate("");
-            setPostReason("");
-            setShowPostModal(true);
-          }}
-          className="bg-white p-4 min-h-[80px] rounded-2xl shadow-sm border-2 border-emerald-50 text-emerald-700 font-bold flex flex-col items-center justify-center gap-2 active:scale-95 transition-all"
-        >
-          <PlusCircle size={24} /> <span>我想賺錢</span>
-        </button>
-      </div>
-
-      <div className="space-y-3">
-        <h2 className="text-lg font-bold flex items-center gap-2 text-slate-800">
-          <ClipboardList size={20} /> 佈告欄 ({openOrdersMemo.length})
-        </h2>
-        {openOrdersMemo.map((order) => (
-          <div
-            key={order.id}
-            className="bg-white p-4 rounded-2xl border flex gap-4 shadow-sm relative overflow-hidden"
-          >
-            <div
-              className={`absolute left-0 top-0 bottom-0 w-1.5 ${
-                order.type === "red" ? "bg-red-500" : "bg-emerald-500"
-              }`}
-            />
-            <div className="flex-1 pl-2">
-              <div className="flex justify-between items-start">
-                <div>
-                  <p
-                    className={`text-xs font-black mb-1 ${
-                      order.type === "red" ? "text-red-500" : "text-emerald-600"
-                    }`}
-                  >
-                    {order.type === "red" ? "我想休假" : "我想賺錢"}
-                  </p>
-                  <p className="font-black text-lg text-slate-800">
-                    {new Date(order.date).toLocaleDateString("zh-TW", {
-                      month: "short",
-                      day: "numeric",
-                      weekday: "short",
-                    })}
-                  </p>
-                  {order.reason && (
-                    <p className="text-xs text-slate-500 flex items-center gap-1 mt-1 font-medium bg-slate-50 p-1.5 rounded-lg inline-flex">
-                      <MessageSquare size={12} /> {order.reason}
-                    </p>
-                  )}
-                  <p className="text-sm font-medium text-slate-500 mt-2">
-                    {SHIFT_TYPES[order.shiftType].label} · {order.creatorName}
-                  </p>
-                </div>
-                {(activeName === order.creatorId || isAdmin) && (
-                  <button
-                    onClick={() => deleteOrder(order.id)}
-                    className="p-2 text-slate-300 hover:text-red-500 active:scale-90"
-                  >
-                    <Trash2 size={18} />
-                  </button>
-                )}
-              </div>
-              <button
-                onClick={() => handleMatch(order)}
-                className={`w-full mt-4 py-3 rounded-xl text-sm font-black transition-all active:scale-95 ${
-                  activeName === order.creatorId
-                    ? "bg-slate-100 text-slate-400"
-                    : "bg-slate-800 text-white shadow-md"
-                }`}
-                disabled={activeName === order.creatorId}
-              >
-                {activeName === order.creatorId ? "等待中..." : "幫這個忙"}
-              </button>
-            </div>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
+    );
 
   return (
     <div className="min-h-screen bg-slate-50 max-w-md mx-auto relative font-sans overflow-x-hidden">
-      <style>{` ::-webkit-scrollbar { display: none; } `}</style>
+      <style>{` ::-webkit-scrollbar { display: none; } html { -ms-overflow-style: none; scrollbar-width: none; scroll-behavior: smooth; } `}</style>
 
       {msg && (
         <div
@@ -580,19 +452,26 @@ export default function App() {
                 </button>
               ))}
             </div>
-            <div className="max-h-[40vh] overflow-y-auto grid grid-cols-2 gap-3 pr-2">
-              {dynamicRoster
-                .filter((p) => p.group === loginGroup)
-                .map((p) => (
-                  <button
-                    key={p.name}
-                    onClick={() => handleLogin(p.name, p.group)}
-                    className="p-4 border-2 border-slate-100 rounded-2xl font-black text-slate-700 active:bg-blue-50 active:scale-95 transition-all"
-                  >
-                    {p.name}
-                  </button>
-                ))}
-            </div>
+
+            {isRosterLoading ? (
+              <div className="flex justify-center py-10">
+                <Loader2 className="animate-spin text-slate-300" />
+              </div>
+            ) : (
+              <div className="max-h-[40vh] overflow-y-auto grid grid-cols-2 gap-3 pr-2">
+                {dynamicRoster
+                  .filter((p) => p.group === loginGroup)
+                  .map((p) => (
+                    <button
+                      key={p.name}
+                      onClick={() => handleLogin(p.name, p.group)}
+                      className="p-4 border-2 border-slate-100 rounded-2xl font-black text-slate-700 active:bg-blue-50 active:scale-95 transition-all"
+                    >
+                      {p.name}
+                    </button>
+                  ))}
+              </div>
+            )}
             {isAdmin && (
               <button
                 onClick={() => setShowRosterManager(true)}
@@ -687,81 +566,7 @@ export default function App() {
         </div>
       )}
 
-      {/* 發布彈窗保持不變... */}
-      {showPostModal && (
-        <div className="fixed inset-0 z-[60] bg-slate-900/60 backdrop-blur-sm flex items-end justify-center">
-          <div className="bg-white w-full max-w-md rounded-t-[2rem] p-6 pb-12 animate-in slide-in-from-bottom-full shadow-2xl">
-            <h2 className="text-2xl font-black mb-6 text-slate-800">
-              {modalType === "red" ? "🔴 發布休假單" : "🟢 發布加班單"}
-            </h2>
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                postOrder({
-                  date: postDate,
-                  shiftType: postShift,
-                  type: modalType,
-                  reason: postReason,
-                  amount: postAmount,
-                });
-              }}
-              className="space-y-5"
-            >
-              <input
-                required
-                type="date"
-                value={postDate}
-                onChange={(e) => setPostDate(e.target.value)}
-                className="w-full p-4 bg-slate-100 rounded-2xl font-medium"
-              />
-              <select
-                value={postShift}
-                onChange={(e) => setPostShift(e.target.value)}
-                className="w-full p-4 bg-slate-100 rounded-2xl font-medium"
-              >
-                <option value="FULL">日夜</option>
-                <option value="DAY">日班</option>
-                <option value="NIGHT">夜班</option>
-              </select>
-              <input
-                type="number"
-                placeholder="金額 (預設1000)"
-                value={postAmount}
-                onChange={(e) => setPostAmount(e.target.value)}
-                className="w-full p-4 bg-slate-100 rounded-2xl font-medium"
-              />
-              <input
-                type="text"
-                placeholder="備註原因 (限10字)"
-                maxLength="10"
-                value={postReason}
-                onChange={(e) => setPostReason(e.target.value)}
-                className="w-full p-4 bg-slate-100 rounded-2xl font-medium"
-              />
-              <div className="flex gap-3">
-                <button
-                  type="button"
-                  onClick={() => setShowPostModal(false)}
-                  className="flex-1 p-4 font-black text-slate-500 bg-slate-100 rounded-2xl"
-                >
-                  取消
-                </button>
-                <button
-                  type="submit"
-                  className={`flex-1 p-4 rounded-2xl font-black text-white ${
-                    modalType === "red"
-                      ? "bg-red-500 shadow-red-500/30"
-                      : "bg-emerald-500 shadow-emerald-500/30"
-                  }`}
-                >
-                  確認發布
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
+      {/* 正常介面 */}
       <header className="sticky top-0 bg-white/90 backdrop-blur-md p-4 flex justify-between items-center z-40 border-b">
         <h1 className="font-black text-slate-800 tracking-wide">{SITE_NAME}</h1>
         <button
@@ -772,11 +577,93 @@ export default function App() {
         </button>
       </header>
 
-      <main className="relative">
+      <main className="p-4 sm:p-6 space-y-6 pb-24">
         {activeTab === "home" ? (
-          renderHome()
+          <>
+            <div className="bg-gradient-to-br from-indigo-600 to-blue-700 rounded-3xl p-6 text-white shadow-xl relative overflow-hidden">
+              <p className="opacity-70 text-sm font-medium">
+                {userData?.group}組 · {activeName}
+              </p>
+              <div className="mt-4">
+                <p className="text-xs opacity-60 mb-1">本月狀態</p>
+                <h2 className="text-xl sm:text-2xl font-black tracking-wide">
+                  {getPointsStatusText(userData?.points)}
+                </h2>
+              </div>
+              <TrendingUp
+                size={60}
+                className="absolute -right-4 -bottom-2 opacity-10"
+              />
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <button
+                onClick={() => {
+                  setModalType("red");
+                  setShowPostModal(true);
+                }}
+                className="bg-white p-4 min-h-[80px] rounded-2xl shadow-sm border-2 border-red-50 text-red-700 font-bold flex flex-col items-center justify-center gap-2 active:scale-95"
+              >
+                <PlusCircle size={24} /> <span>我想休假</span>
+              </button>
+              <button
+                onClick={() => {
+                  setModalType("green");
+                  setShowPostModal(true);
+                }}
+                className="bg-white p-4 min-h-[80px] rounded-2xl shadow-sm border-2 border-emerald-50 text-emerald-700 font-bold flex flex-col items-center justify-center gap-2 active:scale-95"
+              >
+                <PlusCircle size={24} /> <span>我想賺錢</span>
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              <h2 className="text-lg font-bold flex items-center gap-2 text-slate-800">
+                <ClipboardList size={20} /> 佈告欄 ({openOrdersMemo.length})
+              </h2>
+              {openOrdersMemo.map((order) => (
+                <div
+                  key={order.id}
+                  className="bg-white p-4 rounded-2xl border flex gap-4 shadow-sm relative overflow-hidden"
+                >
+                  <div
+                    className={`absolute left-0 top-0 bottom-0 w-1.5 ${
+                      order.type === "red" ? "bg-red-500" : "bg-emerald-500"
+                    }`}
+                  />
+                  <div className="flex-1 pl-2">
+                    <p
+                      className={`text-xs font-black mb-1 ${
+                        order.type === "red"
+                          ? "text-red-500"
+                          : "text-emerald-600"
+                      }`}
+                    >
+                      {order.type === "red" ? "我想休假" : "我想賺錢"}
+                    </p>
+                    <p className="font-black text-lg text-slate-800">
+                      {order.date} ({order.creatorName})
+                    </p>
+                    <button
+                      onClick={() => handleMatch(order)}
+                      className={`w-full mt-4 py-3 rounded-xl text-sm font-black transition-all active:scale-95 ${
+                        activeName === order.creatorId
+                          ? "bg-slate-100 text-slate-400"
+                          : "bg-slate-800 text-white shadow-md"
+                      }`}
+                      disabled={activeName === order.creatorId}
+                    >
+                      {activeName === order.creatorId
+                        ? "等待中..."
+                        : "幫這個忙"}
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </>
         ) : (
-          <div className="p-4 sm:p-6 space-y-4 pb-24">
+          <div className="space-y-4">
             <h2 className="text-lg font-bold flex items-center gap-2 text-slate-800">
               <History size={20} /> 換班完成區
             </h2>
@@ -792,7 +679,7 @@ export default function App() {
                   {(activeName === order.creatorId || isAdmin) && (
                     <button
                       onClick={() => deleteOrder(order.id)}
-                      className="p-2 -mr-2 text-slate-300 hover:text-red-500 active:scale-90"
+                      className="p-2 -mr-2 text-slate-300 hover:text-red-500"
                     >
                       <Trash2 size={16} />
                     </button>
@@ -822,9 +709,7 @@ export default function App() {
                   </div>
                 </div>
                 <div className="mt-4 pt-3 border-t text-xs text-slate-500 flex justify-between items-center font-medium">
-                  <span>
-                    {order.date} · {SHIFT_TYPES[order.shiftType].label}
-                  </span>
+                  <span>{order.date}</span>
                   <span className="font-black text-slate-700 text-sm">
                     💰 {order.amount || 1000}
                   </span>
@@ -835,6 +720,74 @@ export default function App() {
         )}
       </main>
 
+      {/* 發布單 Modal */}
+      {showPostModal && (
+        <div className="fixed inset-0 z-[60] bg-slate-900/60 backdrop-blur-sm flex items-end justify-center">
+          <div className="bg-white w-full max-w-md rounded-t-[2rem] p-6 pb-12 animate-in slide-in-from-bottom-full">
+            <h2 className="text-2xl font-black mb-6 text-slate-800">
+              {modalType === "red" ? "🔴 發布休假單" : "🟢 發布加班單"}
+            </h2>
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                postOrder({
+                  date: postDate,
+                  shiftType: postShift,
+                  type: modalType,
+                  reason: postReason,
+                  amount: postAmount,
+                });
+              }}
+              className="space-y-5"
+            >
+              <input
+                required
+                type="date"
+                value={postDate}
+                onChange={(e) => setPostDate(e.target.value)}
+                className="w-full p-4 bg-slate-100 rounded-2xl font-medium outline-none"
+              />
+              <select
+                value={postShift}
+                onChange={(e) => setPostShift(e.target.value)}
+                className="w-full p-4 bg-slate-100 rounded-2xl font-medium outline-none"
+              >
+                <option value="FULL">日夜</option>
+                <option value="DAY">日班</option>
+                <option value="NIGHT">夜班</option>
+              </select>
+              <input
+                type="number"
+                placeholder="金額 (預設 1000)"
+                value={postAmount}
+                onChange={(e) => setPostAmount(e.target.value)}
+                className="w-full p-4 bg-slate-100 rounded-2xl font-medium outline-none"
+              />
+              <div className="flex gap-3">
+                <button
+                  type="button"
+                  onClick={() => setShowPostModal(false)}
+                  className="flex-1 p-4 font-black text-slate-500 bg-slate-100 rounded-2xl active:scale-95"
+                >
+                  取消
+                </button>
+                <button
+                  type="submit"
+                  className={`flex-1 p-4 rounded-2xl font-black text-white ${
+                    modalType === "red"
+                      ? "bg-red-500 shadow-red-500/30"
+                      : "bg-emerald-500 shadow-emerald-500/30"
+                  }`}
+                >
+                  確認發布
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* 底部導覽列 */}
       <nav className="fixed bottom-0 w-full max-w-md bg-white/95 backdrop-blur-md border-t pt-2 pb-[90px] flex justify-around items-center z-40 shadow-[0_-10px_40px_-15px_rgba(0,0,0,0.1)]">
         <button
           onClick={() => setActiveTab("home")}
